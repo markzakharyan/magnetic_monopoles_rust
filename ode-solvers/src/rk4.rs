@@ -21,8 +21,7 @@ where
     x_out: Vec<f64>,
     y_out: Vec<V>,
     stats: Stats,
-    event_fn: Option<Box<dyn Fn(f64, &V, &Matrix4<f64>) -> bool>>,
-    boost_back: Matrix4<f64>,
+    event_fn: Option<Box<dyn Fn(f64, &V) -> bool>>,
 }
 
 impl<T, D: Dim, F> Rk4<OVector<T, D>, F>
@@ -43,7 +42,7 @@ where
     /// * `x_end`       - Final value of the independent variable
     /// * `step_size`   - Step size used in the method
     ///
-    pub fn new(f: F, x: f64, y: OVector<T, D>, x_end: f64, step_size: f64, boost_back: Matrix4<f64>) -> Self {
+    pub fn new(f: F, x: f64, y: OVector<T, D>, x_end: f64, step_size: f64) -> Self {
         Rk4 {
             f,
             x,
@@ -55,12 +54,11 @@ where
             y_out: Vec::new(),
             stats: Stats::new(),
             event_fn: None,
-            boost_back: boost_back,
         }
     }
 
     // Add a method to set the event function
-    pub fn with_event_fn(mut self, event_fn: Box<dyn Fn(f64, &OVector<T, D>, &Matrix4<f64>) -> bool>) -> Self {
+    pub fn with_event_fn(mut self, event_fn: Box<dyn Fn(f64, &OVector<T, D>) -> bool>) -> Self {
         self.event_fn = Some(event_fn);
         self
     }
@@ -77,7 +75,7 @@ where
 
             // Check if the event function is set and if the event has occurred
             if let Some(ref event_fn) = self.event_fn {
-                if event_fn(x_new, &y_new, &self.boost_back) {
+                if event_fn(x_new, &y_new) {
                     break; // Stop integration if the event occurs
                 }
             }
