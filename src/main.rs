@@ -1,10 +1,15 @@
-use std::{cmp::Ordering, f32::consts::E, f64::consts::PI, io::Error};
+use std::f32::consts::E;
+use std::{cmp::Ordering, f64::consts::PI, io::Error};
 // use rayon::prelude::*;
 // use std::sync::Mutex;
 // use ndarray::{Array1, Array2, ArrayBase, Data, Ix1};
 use nalgebra::{Matrix4, Vector2};
 use ode_solvers::{Rk4, SVector, System, Vector3, Vector4, Dop853}; //, dop853::Dop853
 use roots::{find_root_brent, SimpleConvergency};
+use plotters::prelude::*;
+use plotters::style::ShapeStyle;
+
+
 
 const ETA_ETA_MATRIX: Matrix4<f64> = Matrix4::new(
     1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0,
@@ -130,6 +135,43 @@ fn de(gamma: f64, delta_r: f64) -> f64 {
     1e3 * delta_p_pdg(delta_r, gamma, 1.0)
 }
 
+fn s(x1: &Vector3<f64>, x2: &Vector3<f64>) -> Vector3<f64> {
+    (x1 - x2).normalize()
+}
+
+fn vpar(v: &Vector3<f64>, x1: &Vector3<f64>, x2: &Vector3<f64>) -> Vector3<f64> {
+    let s_dir = s(x1, x2);
+    s_dir * v.dot(&s_dir)
+}
+
+fn vper(v: &Vector3<f64>, x1: &Vector3<f64>, x2: &Vector3<f64>) -> Vector3<f64> {
+    v - vpar(v, x1, x2)
+}
+
+fn gammasc(v: f64) -> f64 {
+    1.0 / (1.0 - v.powi(2)).sqrt()
+}
+
+fn gamma(v: &Vector3<f64>) -> f64 {
+    1.0 / (1.0 - v.norm_squared()).sqrt()
+}
+
+fn lorentz(p4: &Vector4<f64>) -> Matrix4<f64> {
+    let p4_1_4: Vector3<f64> = Vector3::new(p4.y, p4.z, p4.w);
+    let v: f64 = p4_1_4.norm() / p4.x;
+    let n: Vector3<f64> = p4_1_4 / p4_1_4.norm();
+    let gscv = gammasc(v);
+
+    Matrix4::new(
+        gscv, -gscv * v * n.x, -gscv * v * n.y, -gscv * v * n.z,
+        -gscv * v * n.x, 1.0 + (gscv - 1.0) * n.x.powi(2), (gscv - 1.0) * n.x * n.y, (gscv - 1.0) * n.x * n.z,
+        -gscv * v * n.y, (gscv - 1.0) * n.y * n.x, 1.0 + (gscv - 1.0) * n.y.powi(2), (gscv - 1.0) * n.y * n.z,
+        -gscv * v * n.z, (gscv - 1.0) * n.z * n.x, (gscv - 1.0) * n.z * n.y, 1.0 + (gscv - 1.0) * n.z.powi(2),
+    )
+
+    // Matrix4::identity()
+}
+
 
 fn yzw(p4: &Vector4<f64>) -> Vector3<f64> {
     Vector3::new(p4.y, p4.z, p4.w)
@@ -137,80 +179,92 @@ fn yzw(p4: &Vector4<f64>) -> Vector3<f64> {
 
 fn dp_dt(
     v: &Vector3<f64>,
-    q_m: f64,
     q_e: f64,
+    q_m: f64,
     e: &Vector3<f64>,
     b: &Vector3<f64>,
-    monopole_flag: bool,
 ) -> Vector3<f64> {
-    if monopole_flag {
-        q_m * b + q_e * (v.cross(b))
-    } else {
-        q_e * (e + v.cross(b))
-    }
+    q_m * b + q_e * (v.cross(b))
 }
 
 struct ParticleSystem {
     m: f64,
-    b: Vector3<f64>,
-    monopole_flag: bool,
+    q_e: f64,
+    q_m: f64,
 }
 
-type State = ode_solvers::SVector<f64, 6>;
+type State = ode_solvers::SVector<f64, 15>;
 type Time = f64;
 
 impl System<State> for ParticleSystem {
     fn system(&self, _t: Time, _y: &State, _dy: &mut State) {
-        let gammabeta: Vector3<f64> = _y.fixed_rows::<3>(0).into_owned();
-        let ef: Vector3<f64> = _y.fixed_rows::<3>(3).into_owned();
+        let gammabeta1 = _y.fixed_rows::<3>(0).into_owned();
+        let gammabeta2 = _y.fixed_rows::<3>(3).into_owned();
+        let x1 = _y.fixed_rows::<3>(6).into_owned();
+        let x2 = _y.fixed_rows::<3>(9).into_owned();
+        let b = _y.fixed_rows::<3>(12).into_owned();
 
-        let dgammabetadt: Vector3<f64> = (1.0 / self.m)
+        let dgammabeta1dt = (1.0 / self.m)
             * dp_dt(
-                &(gammabeta / (1.0 + gammabeta.norm_squared()).sqrt()),
-                1.0,
-                1.0,
-                &ef,
-                &self.b,
-                self.monopole_flag,
+                &(gammabeta1 / (1.0 + gammabeta1.norm_squared()).sqrt()),
+                self.q_e,
+                self.q_m,
+                &Vector3::new(0.0, 0.0, 0.0),
+                &b
+            );
+        let dgammabeta2dt = (1.0 / self.m)
+            * dp_dt(
+                &(gammabeta2 / (1.0 + gammabeta2.norm_squared()).sqrt()),
+                self.q_e,
+                self.q_m,
+                &Vector3::new(0.0, 0.0, 0.0),
+                &b
             );
 
-        let dxdt: Vector3<f64> = gammabeta / (1.0 + gammabeta.norm_squared()).sqrt();
+        let dx1dt = gammabeta1 / (1.0 + gammabeta1.norm_squared()).sqrt();
+        let dx2dt = gammabeta2 / (1.0 + gammabeta2.norm_squared()).sqrt();
 
-        _dy.fixed_rows_mut::<3>(0).copy_from(&dgammabetadt);
+        _dy.fixed_rows_mut::<3>(0).copy_from(&dgammabeta1dt);
+        _dy.fixed_rows_mut::<3>(3).copy_from(&dgammabeta2dt);
+        _dy.fixed_rows_mut::<3>(6).copy_from(&dx1dt);
+        _dy.fixed_rows_mut::<3>(9).copy_from(&dx2dt);
+        _dy.fixed_rows_mut::<3>(12).copy_from(&Vector3::new(0.0, 0.0, 0.0));
     }
 }
 
 fn find_tracks(
-    vec: &Vector4<f64>,
-    monopole_flag: bool,
+    vec1: &Vector4<f64>,
+    vec2: &Vector4<f64>,
+    q_e: f64,
+    q_m: f64,
     b: &Vector3<f64>,
 ) -> Result<(Interpolator, Interpolator), Error> {
-    let m: f64 = (vec.dot(&(ETA_ETA_MATRIX * vec))).sqrt();
 
-    if !m.is_finite() {
-        return Err(Error::new(std::io::ErrorKind::Other, "NaN in FindTracks"));
-    }
+    let m: f64 = (vec1.dot(&(ETA_ETA_MATRIX * vec1))).sqrt();
 
-    let v: Vector3<f64> = yzw(&vec) / vec.x;
+    // let mut tmax = false;
 
-    let e: Vector3<f64> = v.cross(b);
 
     let system = ParticleSystem {
         m,
-        b: *b,
-        monopole_flag,
+        q_e,
+        q_m
     };
 
     let mut y0: State = State::zeros();
 
-    let gammabeta_0: Vector3<f64> = yzw(&vec) / m;
-    let x_0: Vector3<f64> = Vector3::new(0.0, 10.0_f64.powi(-5), 0.0);
-    // let x2_0: Vector3<f64> = Vector3::new(0.0, -10.0_f64.powi(-5), 0.0);
-    let ef_0: Vector3<f64> = e;
+    let gammabeta1_0: Vector3<f64> = (1.0 / m) * yzw(vec1);
+    let gammabeta2_0: Vector3<f64> = (1.0 / m) * yzw(vec2);
+    let x1_0: Vector3<f64> = Vector3::new(0.0, 10.0_f64.powi(-5), 0.0);
+    let x2_0: Vector3<f64> = Vector3::new(0.0, -10.0_f64.powi(-5), 0.0);
+
 
     // Set initial conditions in y0
-    y0.fixed_rows_mut::<3>(0).copy_from(&gammabeta_0);
-    y0.fixed_rows_mut::<3>(3).copy_from(&ef_0);
+    y0.fixed_rows_mut::<3>(0).copy_from(&gammabeta1_0);
+    y0.fixed_rows_mut::<3>(3).copy_from(&gammabeta2_0);
+    y0.fixed_rows_mut::<3>(6).copy_from(&x1_0);
+    y0.fixed_rows_mut::<3>(9).copy_from(&x2_0);
+    y0.fixed_rows_mut::<3>(12).copy_from(b);
 
     let total_time = 1e19;
     let num_steps = 10000000;
@@ -218,12 +272,12 @@ fn find_tracks(
 
 
     let event_fn: Box<dyn Fn(Time, &State) -> bool> = Box::new(
-        |time, state | {
+        |time, state| {
             let mult_vec: Vector4<f64> = Vector4::new(INV_GEV_IN_SEC, INV_GEV_IN_CM, INV_GEV_IN_CM, INV_GEV_IN_CM);
-            let sumx12: Vector3<f64> = state.fixed_rows::<3>(0).into_owned();
+            let sumx12: Vector3<f64> = state.fixed_rows::<3>(6).into_owned() + state.fixed_rows::<3>(9).into_owned();
             let norm: f64 = (yzw(&mult_vec.component_mul(&Vector4::new(time, sumx12.x, sumx12.y, sumx12.z)))).norm();
-            println!("norm: {:}", norm);
-            norm > 60.0
+            // println!("norm: {:}", norm);
+            norm > 100.0
         },
     );
 
@@ -243,7 +297,7 @@ fn find_tracks(
     match res {
         Ok(_stats) => {
             let time_points: &Vec<f64> = stepper.x_out();
-            let sol_states: &Vec<SVector<f64, 6>> = stepper.y_out();
+            let sol_states: &Vec<SVector<f64, 15>> = stepper.y_out();
 
             let conversion_vec: Vector4<f64> = Vector4::new(INV_GEV_IN_SEC, INV_GEV_IN_CM, INV_GEV_IN_CM, INV_GEV_IN_CM);
             for i in 0..time_points.len() {
@@ -265,14 +319,15 @@ fn find_tracks(
     }
 }
 
+
 struct Interpolator {
     t: Vec<f64>,
-    y: Vec<Vector4<f64>>,
+    vector4: Vec<Vector4<f64>>,
 }
 
 impl Interpolator {
-    fn new(t: Vec<f64>, y: Vec<Vector4<f64>>) -> Self {
-        Interpolator { t, y }
+    fn new(t: Vec<f64>, vector4: Vec<Vector4<f64>>) -> Self {
+        Interpolator { t, vector4 }
     }
 
     fn interpolate(&self, t_value: f64) -> Vector4<f64> {
@@ -281,34 +336,34 @@ impl Interpolator {
             return Vector4::new(0.0, 0.0, 0.0, 0.0);
         }
         if n == 1 {
-            return self.y[0];
+            return self.vector4[0];
         }
 
         if t_value <= self.t[0] {
             // Linear extrapolation using the first two points
-            let slope: Vector4<f64> = (self.y[1] - self.y[0]) / (self.t[1] - self.t[0]);
-            return self.y[0] + slope * (t_value - self.t[0]);
+            let slope = (self.vector4[1] - self.vector4[0]) / (self.t[1] - self.t[0]);
+            return self.vector4[0] + slope * (t_value - self.t[0]);
         }
 
         if t_value >= self.t[n - 1] {
             // Linear extrapolation using the last two points
-            let slope: Vector4<f64> = (self.y[n - 1] - self.y[n - 2]) / (self.t[n - 1] - self.t[n - 2]);
-            return self.y[n - 1] + slope * (t_value - self.t[n - 1]);
+            let slope = (self.vector4[n - 1] - self.vector4[n - 2]) / (self.t[n - 1] - self.t[n - 2]);
+            return self.vector4[n - 1] + slope * (t_value - self.t[n - 1]);
         }
 
         for i in 0..n - 1 {
             if self.t[i] <= t_value && t_value <= self.t[i + 1] {
-                let t0: f64 = self.t[i];
-                let t1: f64 = self.t[i + 1];
-                let y0: &Vector4<f64> = &self.y[i];
-                let y1: &Vector4<f64> = &self.y[i + 1];
-                let factor: f64 = (t_value - t0) / (t1 - t0);
+                let t0 = self.t[i];
+                let t1 = self.t[i + 1];
+                let y0 = &self.vector4[i];
+                let y1 = &self.vector4[i + 1];
+                let factor = (t_value - t0) / (t1 - t0);
                 return y0 * (1.0 - factor) + y1 * factor;
             }
         }
 
         // Fallback, should not reach here if t is sorted
-        self.y[n - 1]
+        self.vector4[n - 1]
     }
 }
 
@@ -330,7 +385,7 @@ fn gamma_gamma(traj_map: &Interpolator, t0: f64) -> f64 {
 }
 
 fn find_intersections(traj: &Interpolator) -> Vec<(i32, f64, f64, f64, f64, f64)> {
-    let t_values: Vec<f64> = traj.t.clone();
+    let t_values = traj.t.clone();
     let r_values: Vec<f64> = t_values
         .iter()
         .map(|&t| {
@@ -346,12 +401,12 @@ fn find_intersections(traj: &Interpolator) -> Vec<(i32, f64, f64, f64, f64, f64)
         .map(|((t0, r0), (t1, r1))| (*t0, *r0, *t1, *r1))
         .collect();
 
-    let mut final_list: Vec<(i32, f64, f64, f64, f64, f64)> = Vec::new();
+    let mut final_list = Vec::new();
 
     for layer in 0..8 {
-        let layer_radius: f64 = ATLAS_RADII_PIXEL[layer];
-        let phi_size_layer: f64 = PHI_SIZE[layer];
-        let z_size_layer: f64 = Z_SIZE[layer];
+        let layer_radius = ATLAS_RADII_PIXEL[layer];
+        let phi_size_layer = PHI_SIZE[layer];
+        let z_size_layer = Z_SIZE[layer];
 
         let layer_list: Vec<(f64, f64, f64, f64)> = coarse_list
             .iter()
@@ -374,11 +429,11 @@ fn find_intersections(traj: &Interpolator) -> Vec<(i32, f64, f64, f64, f64, f64)
             );
 
             if let Ok(t) = root {
-                let traj_t: Vector4<f64> = traj.interpolate(t);
-                let z: f64 = traj_t[3];
-                let phi: f64 = traj_t[2].atan2(traj_t[1]);
-                let gamma: f64 = gamma_gamma(&traj, t);
-                let beta: f64 = beta_beta(&traj, t);
+                let traj_t = traj.interpolate(t);
+                let z = traj_t[3];
+                let phi = traj_t[2].atan2(traj_t[1]);
+                let gamma = gamma_gamma(&traj, t);
+                let beta = beta_beta(&traj, t);
 
                 final_list.push((
                     (layer + 1) as i32,
@@ -395,19 +450,114 @@ fn find_intersections(traj: &Interpolator) -> Vec<(i32, f64, f64, f64, f64, f64)
     final_list
 }
 
+
+fn plot_trajectories(sol1: &Interpolator, sol2: &Interpolator) -> Result<(), Box<dyn std::error::Error>> {
+    // Extracting trajectory data
+    let sol1_points: Vec<(f64, f64)> = sol1.vector4.iter().map(|p| (p[1], p[2])).collect();
+    let sol2_points: Vec<(f64, f64)> = sol2.vector4.iter().map(|p| (p[1], p[2])).collect();
+
+    let rad = *ATLAS_RADII_PIXEL.last().unwrap_or(&0.0);
+    let x_range = (-rad - 5.0, rad + 5.0);
+    let y_range = (-rad - 5.0, rad + 5.0);
+
+    let root_area = BitMapBackend::new("plot.png", (800, 800)).into_drawing_area();
+    root_area.fill(&WHITE)?;
+
+    let mut chart = ChartBuilder::on(&root_area)
+        .x_label_area_size(40)
+        .y_label_area_size(40)
+        .margin(5)
+        .build_cartesian_2d(x_range.0..x_range.1, y_range.0..y_range.1)?;
+
+    chart.configure_mesh().draw()?;
+
+    chart
+        .draw_series(LineSeries::new(
+            sol1_points.into_iter(),
+            BLUE.stroke_width(1),
+        ))?
+        .label("Solution 1")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
+
+    chart
+        .draw_series(LineSeries::new(
+            sol2_points.into_iter(),
+            RED.stroke_width(1),
+        ))?
+        .label("Solution 2")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
+
+        for &radius in &ATLAS_RADII_PIXEL {
+            let num_points = 3600; // Increase the number of points for a smoother circle
+            let circle_data: Vec<(f64, f64)> = (0..num_points)
+                .map(|i| {
+                    let angle = i as f64 * std::f64::consts::PI * 2.0 / num_points as f64;
+                    (radius * angle.cos(), radius * angle.sin())
+                })
+                .collect();
+        
+            chart.draw_series(LineSeries::new(circle_data.into_iter(), &BLACK))?;
+        }
+
+    chart
+        .configure_series_labels()
+        .position(SeriesLabelPosition::UpperLeft)
+        // .background_style(&WHITE.mix(0.8))
+        .border_style(&BLACK)
+        .draw()?;
+
+    Ok(())
+}
+
+fn export_trajectories(
+    filename: &str,
+    sol1: &Interpolator,
+    sol2: &Interpolator,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs::File;
+    use std::io::Write;
+
+    let mut file = File::create(filename)?;
+
+    writeln!(file, "monopole#,t,x,y,z")?;
+
+    for (i, sol) in sol1.vector4.iter().enumerate() {
+        writeln!(file, "1,{}, {}, {}, {}", sol[0], sol[1], sol[2], sol[3])?;
+    }
+
+    for (i, sol) in sol2.vector4.iter().enumerate() {
+        writeln!(file, "2,{}, {}, {}, {}", sol[0], sol[1], sol[2], sol[3])?;
+    }
+
+    Ok(())
+}
+
 pub fn run_point(
-    vec: &Vector4<f64>,
+    vec1: &Vector4<f64>,
+    vec2: &Vector4<f64>,
     plotflag: bool,
-    monopole_flag: bool,
+    exportflag: bool,
 ) -> Result<Vec<(i32, f64, f64, f64, f64, f64, i32)>, Error> {
 
-        match find_tracks(vec, monopole_flag, &Vector3::new(0.0, 0.0, 1.18314e-16)) {
-            Ok((sol_1, sol2)) => {
-                if plotflag {}
+    match find_tracks(vec1, vec2, 0.0, 1.0, &Vector3::new(0.0, 0.0, 1.18314e-16)) {
+            Ok((sol1, sol2)) => {
+                if plotflag {
+                    if let Err(e) = plot_trajectories(&sol1, &sol2) {
+                        println!("Error plotting trajectories: {:?}", e);
+                    }
+                }
 
-                let intersections1: Vec<(i32, f64, f64, f64, f64, f64)> = find_intersections(&sol_1);
-                let intersections2: Vec<(i32, f64, f64, f64, f64, f64)> = find_intersections(&sol2);
-                // Rest of the code...
+                if exportflag {
+                    // Export the trajectories to a file
+                    if let Err(e) = export_trajectories("trajectories.csv", &sol1, &sol2) {
+                        println!("Error exporting trajectories: {:?}", e);
+                    }
+                }
+
+                let intersections1 = find_intersections(&sol1);
+                let intersections2 = find_intersections(&sol2);
+
+
                 let mut combined_intersections: Vec<(i32, f64, f64, f64, f64, f64, i32)> = intersections1
             .iter()
             .map(|&(a, b, c, d, e, f)| (a, b, c, d, e, f, 1))
@@ -430,11 +580,13 @@ pub fn run_point(
                 return Err(err);
             }
         }
+
 }
 
 fn main() {
-    let vec: Vector4<f64> = Vector4::new(421.69956147, 258.12146064, 154.10248991, -254.86516886);
+    let vec1: Vector4<f64> = Vector4::new(421.69956147, 258.12146064, 154.10248991, -254.86516886);
+    let vec2: Vector4<f64> = Vector4::new(202.65928421, -123.22431566, 12.442253162, 56.848428683);
 
-    let aa = run_point(&vec, false, true);
+    let aa = run_point(&vec1, &vec2, false, true);
     println!("{:?}", aa);
 }

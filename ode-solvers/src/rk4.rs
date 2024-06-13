@@ -2,7 +2,7 @@
 
 use crate::dop_shared::{IntegrationError, Stats, System};
 
-use nalgebra::{allocator::Allocator, DefaultAllocator, Dim, OVector, Scalar, Matrix4};
+use nalgebra::{allocator::Allocator, DefaultAllocator, Dim, OVector, Scalar};
 use num_traits::Zero;
 use simba::scalar::{ClosedAdd, ClosedMul, ClosedNeg, ClosedSub, SubsetOf};
 use std::boxed::Box;
