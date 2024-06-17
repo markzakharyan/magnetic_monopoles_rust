@@ -184,7 +184,7 @@ fn dp_dt(
     e: &Vector3<f64>,
     b: &Vector3<f64>,
 ) -> Vector3<f64> {
-    q_m * b + q_e * (v.cross(b))
+    q_e * (e + v.cross(b)) + q_m * (b - v.cross(e))
 }
 
 struct ParticleSystem {
