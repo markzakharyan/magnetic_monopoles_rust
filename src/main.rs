@@ -1,13 +1,8 @@
-use std::f32::consts::E;
-use std::{cmp::Ordering, f64::consts::PI, io::Error};
-// use rayon::prelude::*;
-// use std::sync::Mutex;
-// use ndarray::{Array1, Array2, ArrayBase, Data, Ix1};
-use nalgebra::{Matrix4, Vector2};
+use std::{f64::consts::PI, io::Error};
+use nalgebra::Matrix4;
 use ode_solvers::{Rk4, SVector, System, Vector3, Vector4, Dop853}; //, dop853::Dop853
 use roots::{find_root_brent, SimpleConvergency};
 use plotters::prelude::*;
-use plotters::style::ShapeStyle;
 
 
 
@@ -59,14 +54,6 @@ static A_SI: f64 = 28.085;
 
 static RHO_SI: f64 = 2.33;
 
-// static X0_SI: f64 = 9.37;
-
-// static LAMBDA_SI: f64 = 46.52;
-
-// static LAMBDAC_SI: f64 = 30.16;
-
-// static EEHOLE_SI: f64 = 3.6;
-
 const THICKNESSES: [f64; 8] = [0.023, 0.025, 0.025, 0.025, 0.0285, 0.0285, 0.0285, 0.0285];
 const DELTA_R: [f64; 8] = THICKNESSES;
 
@@ -78,12 +65,6 @@ fn eta(gamma: f64) -> f64 {
     (gamma.powi(2) - 1.0).sqrt()
 }
 
-// fn tmax(ee: f64, mm: f64, me: f64) -> f64 {
-//     let eta_ee_mm = eta(ee / mm);
-//     let beta_ee_mm = beta(ee / mm);
-//     2.0 * me * eta_ee_mm.powi(2)
-//         / (1.0 + 2.0 * eta_ee_mm / beta_ee_mm * me / mm + (me / mm).powi(2))
-// }
 
 fn delta(eta: f64) -> f64 {
     let x0 = STERNHEIMER_X0_SI;
@@ -107,8 +88,6 @@ fn delta(eta: f64) -> f64 {
 }
 
 fn delta_p_pdg(x: f64, gamma: f64, z: f64) -> f64 {
-    // TODO: Ensure this function works as expected!
-    
 
     // 1.0 * Rho_Si * 4 * np.pi * NA * re**2 * me * z**2 *0.5 * Z_Si * x / (A_Si * beta(gamma)**2) * 
     //              (np.log(2 * me * eta(gamma)**2 / (eV2GeV * SternheimerI_Si)) + 
@@ -133,43 +112,6 @@ fn delta_p_pdg(x: f64, gamma: f64, z: f64) -> f64 {
 
 fn de(gamma: f64, delta_r: f64) -> f64 {
     1e3 * delta_p_pdg(delta_r, gamma, 1.0)
-}
-
-fn s(x1: &Vector3<f64>, x2: &Vector3<f64>) -> Vector3<f64> {
-    (x1 - x2).normalize()
-}
-
-fn vpar(v: &Vector3<f64>, x1: &Vector3<f64>, x2: &Vector3<f64>) -> Vector3<f64> {
-    let s_dir = s(x1, x2);
-    s_dir * v.dot(&s_dir)
-}
-
-fn vper(v: &Vector3<f64>, x1: &Vector3<f64>, x2: &Vector3<f64>) -> Vector3<f64> {
-    v - vpar(v, x1, x2)
-}
-
-fn gammasc(v: f64) -> f64 {
-    1.0 / (1.0 - v.powi(2)).sqrt()
-}
-
-fn gamma(v: &Vector3<f64>) -> f64 {
-    1.0 / (1.0 - v.norm_squared()).sqrt()
-}
-
-fn lorentz(p4: &Vector4<f64>) -> Matrix4<f64> {
-    let p4_1_4: Vector3<f64> = Vector3::new(p4.y, p4.z, p4.w);
-    let v: f64 = p4_1_4.norm() / p4.x;
-    let n: Vector3<f64> = p4_1_4 / p4_1_4.norm();
-    let gscv = gammasc(v);
-
-    Matrix4::new(
-        gscv, -gscv * v * n.x, -gscv * v * n.y, -gscv * v * n.z,
-        -gscv * v * n.x, 1.0 + (gscv - 1.0) * n.x.powi(2), (gscv - 1.0) * n.x * n.y, (gscv - 1.0) * n.x * n.z,
-        -gscv * v * n.y, (gscv - 1.0) * n.y * n.x, 1.0 + (gscv - 1.0) * n.y.powi(2), (gscv - 1.0) * n.y * n.z,
-        -gscv * v * n.z, (gscv - 1.0) * n.z * n.x, (gscv - 1.0) * n.z * n.y, 1.0 + (gscv - 1.0) * n.z.powi(2),
-    )
-
-    // Matrix4::identity()
 }
 
 
@@ -198,11 +140,11 @@ type Time = f64;
 
 impl System<State> for ParticleSystem {
     fn system(&self, _t: Time, _y: &State, _dy: &mut State) {
-        let gammabeta1 = _y.fixed_rows::<3>(0).into_owned();
-        let gammabeta2 = _y.fixed_rows::<3>(3).into_owned();
-        let x1 = _y.fixed_rows::<3>(6).into_owned();
-        let x2 = _y.fixed_rows::<3>(9).into_owned();
-        let b = _y.fixed_rows::<3>(12).into_owned();
+        let gammabeta1: Vector3<f64> = _y.fixed_rows::<3>(0).into_owned();
+        let gammabeta2: Vector3<f64> = _y.fixed_rows::<3>(3).into_owned();
+        // let x1: Vector3<f64> = _y.fixed_rows::<3>(6).into_owned();
+        // let x2: Vector3<f64> = _y.fixed_rows::<3>(9).into_owned();
+        let b: Vector3<f64> = _y.fixed_rows::<3>(12).into_owned();
 
         let dgammabeta1dt = (1.0 / self.m)
             * dp_dt(
@@ -221,8 +163,8 @@ impl System<State> for ParticleSystem {
                 &b
             );
 
-        let dx1dt = gammabeta1 / (1.0 + gammabeta1.norm_squared()).sqrt();
-        let dx2dt = gammabeta2 / (1.0 + gammabeta2.norm_squared()).sqrt();
+        let dx1dt: Vector3<f64> = gammabeta1 / (1.0 + gammabeta1.norm_squared()).sqrt();
+        let dx2dt: Vector3<f64> = gammabeta2 / (1.0 + gammabeta2.norm_squared()).sqrt();
 
         _dy.fixed_rows_mut::<3>(0).copy_from(&dgammabeta1dt);
         _dy.fixed_rows_mut::<3>(3).copy_from(&dgammabeta2dt);
@@ -290,7 +232,6 @@ fn find_tracks(
     let res = stepper.integrate();
 
 
-    // Handle result
     let mut sol0_values: Vec<Vector4<f64>> = Vec::new();
     let mut sol1_values: Vec<Vector4<f64>> = Vec::new();
 
@@ -452,7 +393,7 @@ fn find_intersections(traj: &Interpolator) -> Vec<(i32, f64, f64, f64, f64, f64)
 
 
 fn plot_trajectories(sol1: &Interpolator, sol2: &Interpolator) -> Result<(), Box<dyn std::error::Error>> {
-    // Extracting trajectory data
+
     let sol1_points: Vec<(f64, f64)> = sol1.vector4.iter().map(|p| (p[1], p[2])).collect();
     let sol2_points: Vec<(f64, f64)> = sol2.vector4.iter().map(|p| (p[1], p[2])).collect();
 
@@ -574,9 +515,7 @@ pub fn run_point(
         return Ok(combined_intersections);
             }
             Err(err) => {
-                // Handle the error case if needed
                 println!("Error: {:?}", err);
-                // Return an appropriate value or propagate the error
                 return Err(err);
             }
         }
